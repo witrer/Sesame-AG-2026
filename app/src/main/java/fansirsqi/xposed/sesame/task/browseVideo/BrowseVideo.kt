@@ -4,16 +4,16 @@ import fansirsqi.xposed.sesame.model.ModelFields
 import fansirsqi.xposed.sesame.model.ModelGroup
 import fansirsqi.xposed.sesame.model.modelFieldExt.BooleanModelField
 import fansirsqi.xposed.sesame.model.modelFieldExt.IntegerModelField
-import fansirsqi.xposed.sesame.model.modelFieldExt.StringModelField
 import fansirsqi.xposed.sesame.task.ModelTask
 import fansirsqi.xposed.sesame.util.Log
 import fansirsqi.xposed.sesame.util.RandomUtil
+import fansirsqi.xposed.sesame.util.ResChecker
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 /**
- * 浏览视频领红包任务模块
- * 使用支付宝 adtask/antiep 真实接口完成每日视频浏览任务
+ * 首页视频红包任务 - 看视频领红包
+ * 需要先抓包确定正确的RPC接口。当前使用 AntFarm 已验证的视频流程作为基础。
  */
 class BrowseVideo : ModelTask() {
 
@@ -30,8 +30,6 @@ class BrowseVideo : ModelTask() {
     private lateinit var videoAutoBrowse: BooleanModelField
     private lateinit var videoMaxCount: IntegerModelField
     private lateinit var videoBrowseDuration: IntegerModelField
-    private lateinit var videoAutoClaim: BooleanModelField
-    private lateinit var videoTaskBizKey: StringModelField
 
     override fun getName(): String = MODULE_NAME
     override fun getGroup(): ModelGroup = ModelGroup.OTHER
@@ -42,17 +40,11 @@ class BrowseVideo : ModelTask() {
             addField(BooleanModelField("videoAutoBrowse", "视频红包 | 自动浏览", true).also {
                 videoAutoBrowse = it
             })
-            addField(IntegerModelField("videoMaxCount", "视频红包 | 每日最大次数", 10, 1, 50).also {
+            addField(IntegerModelField("videoMaxCount", "视频红包 | 每日最大次数", 5, 1, 30).also {
                 videoMaxCount = it
             })
-            addField(IntegerModelField("videoBrowseDuration", "视频红包 | 每次浏览时长(秒)", 15, 5, 60).also {
+            addField(IntegerModelField("videoBrowseDuration", "视频红包 | 模拟浏览时长(秒)", 15, 5, 30).also {
                 videoBrowseDuration = it
-            })
-            addField(BooleanModelField("videoAutoClaim", "视频红包 | 自动领取奖励", true).also {
-                videoAutoClaim = it
-            })
-            addField(StringModelField("videoTaskBizKey", "视频红包 | 任务BizKey(逗号分隔)", "WATCH_VIDEO").also {
-                videoTaskBizKey = it
             })
         }
     }
@@ -69,61 +61,90 @@ class BrowseVideo : ModelTask() {
 
         val maxCount = videoMaxCount.value
         val browseDuration = videoBrowseDuration.value
-        val bizKeys = videoTaskBizKey.value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        Log.record(TAG, "开始浏览视频任务，目标: $maxCount 次，时长: ${browseDuration}秒")
 
-        Log.record(TAG, "开始浏览视频任务，目标次数: $maxCount, BizKeys: $bizKeys")
+        var success = 0
+        var fail = 0
 
-        var successCount = 0
-        var failCount = 0
+        // 获取所有任务
+        val taskResult = BrowseVideoRpcCall.listFarmTask(VERSION)
+        val tasks = try {
+            JSONObject(taskResult).optJSONArray("taskInfoList")
+        } catch (_: Exception) { null }
 
-        for (i in 1..maxCount) {
+        if (tasks == null || tasks.length() == 0) {
+            Log.record(TAG, "未找到任何任务 (listFarmTask 返回空)")
+            return
+        }
+
+        Log.record(TAG, "共 ${tasks.length()} 个任务，筛选视频类...")
+
+        for (i in 0 until tasks.length()) {
+            if (success >= maxCount) break
             try {
-                delay(RandomUtil.nextLong(3000, 6000))
+                val task = tasks.getJSONObject(i)
+                val bizKey = task.optString("bizKey", "")
+                val title = task.optString("title", bizKey)
 
-                // 遍历所有 bizKey 尝试完成任务
-                var taskCompleted = false
-                for (bizKey in bizKeys) {
-                    // 1. 执行任务
-                    val taskResult = BrowseVideoRpcCall.doFarmTask(bizKey, VERSION)
-                    if (taskResult.isNotEmpty()) {
-                        val json = try { JSONObject(taskResult) } catch (_: Exception) { null }
-                        val success = json?.optBoolean("success", false) ?: false
+                // 只处理视频/BROWSE类任务
+                val isVideoTask = bizKey.contains("VIDEO", ignoreCase = true) ||
+                        title.contains("视频") ||
+                        bizKey.contains("BROWSE", ignoreCase = true)
+                if (!isVideoTask) continue
 
-                        if (success) {
-                            // 2. 模拟浏览时间
-                            val duration = browseDuration + RandomUtil.nextInt(-3, 3)
-                            Log.record(TAG, "[$i/$maxCount] $bizKey 任务提交成功，模拟浏览 ${duration}秒")
-                            delay(duration * 1000L)
+                delay(RandomUtil.nextLong(2000, 5000))
+                Log.record(TAG, "[${success + 1}/$maxCount] $title ($bizKey)")
 
-                            // 3. 尝试完成 IEP 任务
-                            if (videoAutoClaim.value) {
-                                delay(RandomUtil.nextLong(2000, 4000))
-                                BrowseVideoRpcCall.finishIepTask(bizKey, "ANTFARM", "browse_${System.currentTimeMillis()}")
+                // 执行任务获取视频URL
+                val doResult = BrowseVideoRpcCall.doFarmTask(bizKey, VERSION)
+                val doJson = try { JSONObject(doResult) } catch (_: Exception) { null }
+                val videoUrl = doJson?.optString("videoUrl", "")
+                        ?: doJson?.optJSONObject("extendInfo")?.optString("videoUrl", "")
+                        ?: ""
+
+                if (videoUrl.isNotEmpty()) {
+                    // 提取 contentId
+                    val contentId = extractContentId(videoUrl)
+                    if (contentId.isNotEmpty()) {
+                        // 下发+观看+触发奖励（AntFarm 已验证流程）
+                        if (ResChecker.checkRes(TAG, JSONObject(BrowseVideoRpcCall.videoDeliverModule(contentId)))) {
+                            delay(browseDuration * 1000L)
+                            if (ResChecker.checkRes(TAG, JSONObject(BrowseVideoRpcCall.videoTrigger(contentId)))) {
+                                success++
+                                Log.other(TAG, "视频红包完成🧧[$title]")
+                                continue
                             }
-
-                            taskCompleted = true
-                            break
                         }
                     }
                 }
 
-                if (taskCompleted) {
-                    successCount++
-                    Log.record(TAG, "[$i/$maxCount] 视频任务完成")
+                // 非视频URL的任务，尝试直接 doFarmTask 完成
+                if (doJson != null && doJson.optBoolean("success", false)) {
+                    success++
+                    Log.other(TAG, "任务完成✅[$title]")
                 } else {
-                    failCount++
-                    Log.record(TAG, "[$i/$maxCount] 无可用任务")
+                    fail++
+                    Log.record(TAG, "任务失败[$title]")
                 }
 
             } catch (e: kotlinx.coroutines.CancellationException) {
-                Log.record(TAG, "视频浏览任务被中断")
                 throw e
             } catch (e: Exception) {
-                failCount++
-                Log.record(TAG, "[$i/$maxCount] 视频任务异常: ${e.message}")
+                fail++
+                Log.record(TAG, "异常: ${e.message}")
             }
         }
 
-        Log.record(TAG, "视频红包任务完成！成功: $successCount, 失败: $failCount")
+        Log.record(TAG, "视频红包完成！成功: $success, 失败: $fail")
+    }
+
+    private fun extractContentId(url: String): String {
+        return try {
+            val idx = url.indexOf("&contentId=")
+            if (idx < 0) return ""
+            val start = idx + 11
+            val end = url.indexOf("&", start)
+            if (end > start) url.substring(start, end) else url.substring(start)
+        } catch (_: Exception) { "" }
     }
 }
