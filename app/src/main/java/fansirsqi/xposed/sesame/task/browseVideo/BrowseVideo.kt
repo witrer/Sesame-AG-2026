@@ -84,7 +84,7 @@ class BrowseVideo : ModelTask() {
                         }
                     }
                     fail++; Log.record(TAG, "方案A失败[$title]")
-                } catch (_: kotlinx.coroutines.CancellationException) { throw _
+                } catch (ce: kotlinx.coroutines.CancellationException) { throw ce
                 } catch (e: Exception) { fail++; Log.record(TAG, "异常: ${e.message}") }
             }
         }
