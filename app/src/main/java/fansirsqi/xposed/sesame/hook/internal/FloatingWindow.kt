@@ -1,19 +1,11 @@
 package fansirsqi.xposed.sesame.hook.internal
 
-import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.Application
 import android.content.Context
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.os.Bundle
+import android.graphics.*
 import android.os.Handler
 import android.os.Looper
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
-import android.view.WindowManager
+import android.view.*
 import android.widget.*
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
@@ -21,250 +13,217 @@ import fansirsqi.xposed.sesame.hook.ApplicationHook
 import fansirsqi.xposed.sesame.util.Files
 import fansirsqi.xposed.sesame.util.Log
 import java.io.File
+import java.io.FileWriter
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 /**
- * 悬浮窗调试助手
- * 功能：抓页面信息、录制RPC、手动执行任务
+ * 悬浮窗调试助手 — 简洁圆球 + 展开面板
  */
 object FloatingWindow {
 
     private const val TAG = "FloatingWindow"
     private var wm: WindowManager? = null
-    private var rootView: View? = null
-    private var infoText: TextView? = null
+    private var ballView: View? = null
+    private var panelView: View? = null
+    private var isPanelShown = false
     private var isShown = false
-    private var shownInProcess = ""
-    private var isRpcRecording = false
-    private var currentActivity: String = ""
-    private var captureFile: File? = null
-    private var captureWriter: java.io.FileWriter? = null
+    private var currentActivity = ""
+    private var writer: FileWriter? = null
+    private var isRecording = false
+
+    private val ballSize = 88
     private val handler = Handler(Looper.getMainLooper())
-    private var activityHookInstalled = false
+
+    private val accentColor = Color.parseColor("#1677FF")
+    private val bgColor = Color.parseColor("#E81A1A1A")
+
+    private var params: WindowManager.LayoutParams? = null
 
     fun show(context: Context, processName: String? = null) {
-        // 只在主进程显示一个悬浮窗
         if (isShown) return
         if (processName != null && processName != "com.eg.android.AlipayGphone") {
-            Log.record(TAG, "跳过非主进程: $processName")
-            return
+            Log.record(TAG, "跳过: $processName"); return
         }
         val ctx = context.applicationContext
         wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        installActivityHook()
 
-        // 安装 Activity 生命周期 Hook
-        if (!activityHookInstalled) {
-            installActivityHook()
-            activityHookInstalled = true
-        }
-
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#E8000000"))
-            setPadding(10, 8, 10, 8)
-        }
-
-        // 标题栏
-        val titleRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val icon = TextView(ctx).apply {
-            text = "🔍"; textSize = 18f
-        }
-        val title = TextView(ctx).apply {
-            text = " TK助手"
+        // 悬浮球 — 圆角矩形
+        ballView = TextView(ctx).apply {
+            text = "TK"
             setTextColor(Color.WHITE)
-            textSize = 13f
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-        }
-        titleRow.addView(icon); titleRow.addView(title)
-        root.addView(titleRow)
-
-        // 信息区
-        infoText = TextView(ctx).apply {
-            setTextColor(Color.parseColor("#00FF00"))
-            textSize = 9f
-            text = "等待中..."
-            setPadding(4, 4, 4, 4)
-            layoutParams = LinearLayout.LayoutParams(-1, 120)
-        }
-        root.addView(infoText)
-
-        // 按钮区
-        fun makeBtn(label: String, color: Int, action: () -> Unit): Button {
-            return Button(ctx).apply {
-                text = label; textSize = 9f
-                setBackgroundColor(color)
-                setTextColor(Color.WHITE)
-                setPadding(6, 2, 6, 2)
-                setOnClickListener { action() }
+            textSize = 14f
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(accentColor)
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE; cornerRadius = ballSize / 2f
+                setColor(accentColor)
             }
+            background = bg
+            setPadding(0, 0, 0, 0)
         }
 
-        val btnRow1 = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        btnRow1.addView(makeBtn("📋页面", Color.parseColor("#1565C0")) { capturePage() })
-        btnRow1.addView(makeBtn(if(isRpcRecording)"⏹停止" else "⏺录制", Color.parseColor("#C62828")) { toggleRpcRecord() })
-        btnRow1.addView(makeBtn("▶️任务", Color.parseColor("#2E7D32")) { execMainTask() })
-        btnRow1.addView(makeBtn("✕", Color.GRAY) { hide() })
-        root.addView(btnRow1)
-
-        rootView = root
-
-        val params = WindowManager.LayoutParams(
-            320, -2,
+        params = WindowManager.LayoutParams(
+            ballSize, ballSize,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.END; x = 5; y = 150 }
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = 10; y = 300
+        }
 
-        // 拖动
-        var ix = 0; var iy = 0; var itx = 0f; var ity = 0f
-        root.setOnTouchListener { _, event ->
+        var ix = 0; var iy = 0; var itx = 0f; var ity = 0f; var moved = false
+        ballView?.setOnTouchListener { _, event ->
             when (event.action) {
-                MotionEvent.ACTION_DOWN -> { ix = params.x; iy = params.y; itx = event.rawX; ity = event.rawY; true }
-                MotionEvent.ACTION_MOVE -> {
-                    params.x = ix + (event.rawX - itx).toInt()
-                    params.y = iy + (event.rawY - ity).toInt()
-                    wm?.updateViewLayout(rootView, params); true
-                }
-                MotionEvent.ACTION_UP -> { if(Math.abs(event.rawX-itx)<5&&Math.abs(event.rawY-ity)<5) root.performClick(); true }
+                MotionEvent.ACTION_DOWN -> { ix = params!!.x; iy = params!!.y; itx = event.rawX; ity = event.rawY; moved = false; true }
+                MotionEvent.ACTION_MOVE -> { params!!.x = ix + (event.rawX - itx).toInt(); params!!.y = iy + (event.rawY - ity).toInt(); wm?.updateViewLayout(ballView, params); moved = true; true }
+                MotionEvent.ACTION_UP -> { if (!moved) togglePanel(ctx); true }
                 else -> false
             }
         }
 
-        try {
-            wm?.addView(rootView, params)
-            isShown = true
-            updateInfo("悬浮窗已就绪")
-            Log.record(TAG, "悬浮窗已显示")
-        } catch (e: Exception) {
-            Log.record(TAG, "悬浮窗显示失败(可能缺少悬浮窗权限): ${e.message}")
-            rootView = null
+        wm?.addView(ballView, params)
+        isShown = true
+        Log.record(TAG, "悬浮球已显示")
+    }
+
+    private fun togglePanel(ctx: Context) {
+        if (isPanelShown) { hidePanel(); return }
+        showPanel(ctx)
+    }
+
+    private fun showPanel(ctx: Context) {
+        hidePanel()
+        val dp = ctx.resources.displayMetrics.density
+
+        val panel = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bgColor)
+            setPadding(dp2px(12, dp), dp2px(10, dp), dp2px(12, dp), dp2px(10, dp))
+            val bg = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = dp2px(12, dp).toFloat(); setColor(bgColor) }
+            background = bg
         }
+
+        // 状态行
+        val status = TextView(ctx).apply {
+            text = "📍 $currentActivity"
+            setTextColor(Color.parseColor("#AAAAAA")); textSize = 10f
+            setPadding(0, 0, 0, dp2px(6, dp))
+        }
+        panel.addView(status)
+
+        // 按钮
+        fun addBtn(label: String, color: Int, action: () -> Unit): Button {
+            return Button(ctx).apply {
+                text = label
+                setTextColor(Color.WHITE); textSize = 11f
+                setBackgroundColor(color)
+                setPadding(dp2px(10, dp), dp2px(6, dp), dp2px(10, dp), dp2px(6, dp))
+                val bg = GradientDrawable().apply { shape = GradientDrawable.RECTANGLE; cornerRadius = dp2px(6, dp).toFloat(); setColor(color) }
+                background = bg
+                setOnClickListener { action() }
+            }
+        }
+
+        val row1 = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        row1.addView(addBtn("📋 抓页面", Color.parseColor("#1565C0")) { capturePage() })
+        row1.addView(Space(ctx).apply { layoutParams = LinearLayout.LayoutParams(dp2px(8, dp), 0) })
+        row1.addView(addBtn(if(isRecording)"⏹ 停止" else "⏺ 录RPC", Color.parseColor("#C62828")) { toggleRecord() })
+        panel.addView(row1)
+
+        val row2 = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(0, dp2px(6, dp), 0, 0) }
+        row2.addView(addBtn("▶️ 跑任务", Color.parseColor("#2E7D32")) { ApplicationHook.execHandler() })
+        row2.addView(Space(ctx).apply { layoutParams = LinearLayout.LayoutParams(dp2px(8, dp), 0) })
+        row2.addView(addBtn("✕ 关闭", Color.GRAY) { hidePanel() })
+        panel.addView(row2)
+
+        panelView = panel
+
+        val p = WindowManager.LayoutParams(-2, -2,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.END
+            x = 10; y = 300 + ballSize + dp2px(8, dp)
+        }
+
+        wm?.addView(panelView, p)
+        isPanelShown = true
     }
 
-    fun hide() {
-        try { if (rootView != null) wm?.removeView(rootView) } catch (_: Throwable) {}
-        rootView = null; isShown = false
+    private fun hidePanel() {
+        try { if (panelView != null) wm?.removeView(panelView) } catch (_: Throwable) {}
+        panelView = null; isPanelShown = false
     }
 
-    /** 捕获当前页面信息 */
     private fun capturePage() {
         val sb = StringBuilder()
         val ts = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         sb.appendLine("=== $ts ===")
         sb.appendLine("Activity: $currentActivity")
-        // 获取 Fragment 信息
         try {
-            val activity = getCurrentActivity()
-            if (activity != null) {
-                val fm = activity.fragmentManager
-                val fragments = fm.fragments
-                sb.appendLine("Fragments (${fragments.size}):")
-                fragments.forEach { f ->
-                    sb.appendLine("  ${f.javaClass.name}")
-                    // 获取 View 层级
-                    val view = f.view
-                    if (view != null) {
-                        dumpViewHierarchy(view, sb, "    ")
-                    }
+            val app = Class.forName("com.alipay.mobile.framework.AlipayApplication")
+            val inst = app.getMethod("getInstance").invoke(null)
+            val mc = app.getMethod("getMicroApplicationContext").invoke(inst)
+            val ta = mc.javaClass.getMethod("getTopActivity").invoke(mc) as? Activity
+            if (ta != null) {
+                val fm = ta.fragmentManager
+                sb.appendLine("Fragments: ${fm.fragments.size}")
+                fm.fragments.forEach { f -> sb.appendLine("  ${f.javaClass.name}") }
+                // dump view tree
+                if (ta.window?.decorView != null) {
+                    dumpView(ta.window!!.decorView, sb, "  ", 0)
                 }
             }
         } catch (_: Throwable) {}
-
         val info = sb.toString()
-        updateInfo(info)
-
-        // 追加到文件
+        // Save
         val file = File(Files.CONFIG_DIR.parentFile, "page_capture.txt")
-        try {
-            java.io.FileWriter(file, true).use { it.append(info + "\n") }
-        } catch (_: Throwable) {}
-        Log.record(TAG, "页面信息已捕获")
+        try { FileWriter(file, true).use { it.append(info + "\n") } } catch (_: Throwable) {}
+        Log.record(TAG, "页面已捕获")
+        hidePanel()
     }
 
-    private fun dumpViewHierarchy(view: View, sb: StringBuilder, indent: String) {
-        sb.appendLine("$indent${view.javaClass.simpleName} id=${view.id} ${view.width}x${view.height}")
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                dumpViewHierarchy(view.getChildAt(i), sb, "$indent  ")
-                if (sb.length > 5000) break
+    private fun dumpView(v: View, sb: StringBuilder, indent: String, depth: Int) {
+        if (depth > 15 || sb.length > 3000) return
+        val idName = try { v.resources.getResourceEntryName(v.id) } catch (_: Throwable) { "0x${Integer.toHexString(v.id)}" }
+        sb.appendLine("$indent${v.javaClass.simpleName} [$idName] ${v.width}x${v.height}")
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount.coerceAtMost(10)) {
+                dumpView(v.getChildAt(i), sb, "$indent  ", depth + 1)
             }
         }
     }
 
-    /** RPC 录制开关 */
-    private fun toggleRpcRecord() {
-        isRpcRecording = !isRpcRecording
-        if (isRpcRecording) {
-            val fn = "rpc_cap_${SimpleDateFormat("HHmmss", Locale.getDefault()).format(Date())}.txt"
-            captureFile = File(Files.CONFIG_DIR.parentFile, fn)
-            try { captureWriter = java.io.FileWriter(captureFile, true) } catch (_: Throwable) {}
-            updateInfo("🔴 录制中 → $fn")
+    private fun toggleRecord() {
+        isRecording = !isRecording
+        if (isRecording) {
+            val fn = "rpc_fw_${SimpleDateFormat("HHmmss", Locale.getDefault()).format(Date())}.txt"
+            writer = FileWriter(File(Files.CONFIG_DIR.parentFile, fn), true)
         } else {
-            try { captureWriter?.close() } catch (_: Throwable) {}
-            captureWriter = null
-            updateInfo("⚪ 已停止 (${captureFile?.length() ?: 0} bytes)")
+            try { writer?.close() } catch (_: Throwable) {}
+            writer = null
         }
     }
 
-    fun writeRpcEntry(entry: String) {
-        try { captureWriter?.append(entry)?.append("\n")?.flush() } catch (_: Throwable) {}
+    fun writeRpc(entry: String) {
+        try { writer?.append(entry)?.append("\n")?.flush() } catch (_: Throwable) {}
     }
 
-    /** 手动执行主任务 */
-    private fun execMainTask() {
-        try {
-            ApplicationHook.execHandler()
-            updateInfo("✅ 任务已触发")
-        } catch (e: Exception) {
-            updateInfo("❌ 触发失败: ${e.message}")
-        }
-    }
-
-    private fun updateInfo(text: String) {
-        handler.post {
-            val sb = StringBuilder()
-            if (isRpcRecording) sb.appendLine("🔴 录制中")
-            if (currentActivity.isNotEmpty()) sb.appendLine("📱 $currentActivity")
-            sb.append(text)
-            infoText?.text = sb.toString()
-        }
-    }
-
-    /** 获取当前 Activity */
-    private fun getCurrentActivity(): Activity? {
-        return try {
-            val appClass = Class.forName("com.alipay.mobile.framework.AlipayApplication")
-            val app = appClass.getMethod("getInstance").invoke(null)
-            app?.javaClass?.getMethod("getMicroApplicationContext")?.invoke(app)
-                ?.javaClass?.getMethod("getTopActivity")?.invoke(app?.javaClass
-                    ?.getMethod("getMicroApplicationContext")?.invoke(app)) as? Activity
-        } catch (_: Throwable) { null }
-    }
-
-    /** Hook Activity 生命周期来跟踪当前页面 */
     private fun installActivityHook() {
         try {
-            XposedHelpers.findAndHookMethod(
-                Activity::class.java, "onResume",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val activity = param.thisObject as Activity
-                        currentActivity = activity.javaClass.simpleName
-                        if (isShown) updateInfo("📱 $currentActivity")
-                        // 自动捕获新 Activity
-                        val entry = "[${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}] $currentActivity | ${activity.intent?.dataString ?: ""}"
-                        Log.record("ActivityTrack", entry)
-                        try { captureWriter?.append(entry)?.append("\n")?.flush() } catch (_: Throwable) {}
-                    }
-                })
-            Log.record(TAG, "Activity Hook 安装成功")
-        } catch (e: Throwable) {
-            Log.record(TAG, "Activity Hook 失败: ${e.message}")
-        }
+            XposedHelpers.findAndHookMethod(Activity::class.java, "onResume", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    currentActivity = (param.thisObject as Activity).javaClass.simpleName
+                    try { writer?.append("[${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}] $currentActivity\n")?.flush() } catch (_: Throwable) {}
+                }
+            })
+        } catch (_: Throwable) {}
     }
+
+    private fun dp2px(dp: Int, density: Float) = (dp * density + 0.5f).toInt()
 }
