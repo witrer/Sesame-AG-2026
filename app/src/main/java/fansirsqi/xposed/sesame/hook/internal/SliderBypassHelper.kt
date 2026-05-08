@@ -36,16 +36,90 @@ object SliderBypassHelper {
             // 1. Hook RPC 安全联署 - 自动提供有效签名
             hookRpcSecurityCountersign(loader)
 
-            // 2. Hook 安全验证页面 - 使用 H5BasePage 具体实现类
+            // 2. Hook NebulaTransActivity - 自动关闭滑块/验证码页面
+            hookNebulaTransActivity(loader)
+
+            // 3. Hook 安全验证 H5 - H5BasePage 实现类
             hookSecurityVerification(loader)
 
-            // 3. Hook 风险提示 - 防止弹窗
+            // 4. Hook 风险提示弹窗
             hookRiskDialog(loader)
 
             hookInstalled = true
             Log.record(TAG, "所有滑块绕过 Hook 安装成功")
         } catch (e: Throwable) {
             Log.printStackTrace(TAG, "安装滑块绕过 Hook 失败", e)
+        }
+    }
+
+    /**
+     * Hook NebulaTransActivity - 自动跳过滑块验证页面
+     * 新版本支付宝验证码通过 NebulaTransActivity$Main 显示
+     */
+    private fun hookNebulaTransActivity(loader: ClassLoader) {
+        try {
+            val nebulaTransClass = XposedHelpers.findClass(
+                "com.alipay.mobile.nebulax.xriver.activity.NebulaTransActivity",
+                loader
+            )
+            // Hook onCreate - 检测到验证页面立即 finish
+            XposedHelpers.findAndHookMethod(
+                nebulaTransClass,
+                "onCreate",
+                android.os.Bundle::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            val activity = param.thisObject as? android.app.Activity ?: return
+                            val intent = activity.intent
+                            val url = intent?.dataString ?: intent?.getStringExtra("url") ?: ""
+
+                            // 检测验证码/滑块 URL
+                            if (url.contains("security") ||
+                                url.contains("verify") ||
+                                url.contains("captcha") ||
+                                url.contains("slider") ||
+                                url.contains("risk") ||
+                                url.contains("safePay")
+                            ) {
+                                Log.record(TAG, "拦截 NebulaTransActivity 验证页面: $url")
+                                // 不加载验证，直接关闭
+                                activity.finish()
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                })
+
+            // 同时 Hook onResume - 如果在 onResume 时检测到是验证页面
+            XposedHelpers.findAndHookMethod(
+                nebulaTransClass,
+                "onResume",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        try {
+                            val activity = param.thisObject as? android.app.Activity ?: return
+                            val wm = activity.windowManager
+                            // 检查 DecorView 是否包含 embeded_fragment_container (验证码容器)
+                            val decorView = activity.window?.decorView
+                            if (decorView != null) {
+                                val containerId = decorView.context.resources.getIdentifier(
+                                    "embeded_fragment_container", "id",
+                                    "com.alipay.multiplatform.phone.xriver_integration"
+                                )
+                                if (containerId != 0) {
+                                    val container = decorView.findViewById<android.view.View>(containerId)
+                                    if (container != null) {
+                                        Log.record(TAG, "检测到验证码容器，关闭 NebulaTransActivity")
+                                        activity.finish()
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                })
+            Log.record(TAG, "Hook NebulaTransActivity 成功")
+        } catch (e: Throwable) {
+            Log.record(TAG, "Hook NebulaTransActivity 失败: ${e.message}")
         }
     }
 
