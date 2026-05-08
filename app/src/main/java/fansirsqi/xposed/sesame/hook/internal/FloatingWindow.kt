@@ -129,10 +129,15 @@ object FloatingWindow {
             }
         }
 
-        wm?.addView(rootView, params)
-        isShown = true
-        updateInfo("悬浮窗已就绪")
-        Log.record(TAG, "悬浮窗已显示")
+        try {
+            wm?.addView(rootView, params)
+            isShown = true
+            updateInfo("悬浮窗已就绪")
+            Log.record(TAG, "悬浮窗已显示")
+        } catch (e: Exception) {
+            Log.record(TAG, "悬浮窗显示失败(可能缺少悬浮窗权限): ${e.message}")
+            rootView = null
+        }
     }
 
     fun hide() {

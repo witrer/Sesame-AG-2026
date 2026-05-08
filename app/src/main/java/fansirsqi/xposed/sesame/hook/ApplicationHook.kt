@@ -241,8 +241,12 @@ class ApplicationHook {
                         // 初始化 RPC 抓包
                         RpcCaptureHelper.init(classLoader!!)
                         RpcCaptureHelper.installRpcCaptureHooks()
-                        // 显示悬浮窗
-                        FloatingWindow.show(appContext!!)
+                        // 显示悬浮窗（当前 Activity 可用后延迟显示）
+                        try {
+                            mainHandler?.postDelayed({
+                                try { FloatingWindow.show(appContext!!) } catch (_: Throwable) {}
+                            }, 3000)
+                        } catch (_: Throwable) {}
 
                         initVersionInfo(packageName)
                         loadLibs()
