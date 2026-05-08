@@ -36,6 +36,7 @@ object FloatingWindow {
     private var rootView: View? = null
     private var infoText: TextView? = null
     private var isShown = false
+    private var shownInProcess = ""
     private var isRpcRecording = false
     private var currentActivity: String = ""
     private var captureFile: File? = null
@@ -43,8 +44,13 @@ object FloatingWindow {
     private val handler = Handler(Looper.getMainLooper())
     private var activityHookInstalled = false
 
-    fun show(context: Context) {
+    fun show(context: Context, processName: String? = null) {
+        // 只在主进程显示一个悬浮窗
         if (isShown) return
+        if (processName != null && processName != "com.eg.android.AlipayGphone") {
+            Log.record(TAG, "跳过非主进程: $processName")
+            return
+        }
         val ctx = context.applicationContext
         wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
