@@ -7,18 +7,20 @@ import fansirsqi.xposed.sesame.model.modelFieldExt.IntegerModelField
 import fansirsqi.xposed.sesame.task.ModelTask
 import fansirsqi.xposed.sesame.util.Log
 import fansirsqi.xposed.sesame.util.RandomUtil
+import fansirsqi.xposed.sesame.util.ResChecker
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 /**
  * 首页视频红包 — 看视频领现金
- * 通过 alipay.content.interact.task.query 获取任务，promoprod.play.trigger 触发完成
+ * 优先使用 AntFarm 已验证流程，fallback 尝试其他
  */
 class BrowseVideo : ModelTask() {
 
     companion object {
         private const val TAG = "BrowseVideo"
         const val MODULE_NAME = "视频红包"
+        private const val VERSION = "0.1.2601161444.47"
 
         @Volatile var instance: BrowseVideo? = null
     }
@@ -34,8 +36,8 @@ class BrowseVideo : ModelTask() {
 
     override fun getFields() = ModelFields().apply {
         addField(BooleanModelField("videoAutoBrowse", "视频红包 | 自动浏览", true).also { videoAutoBrowse = it })
-        addField(IntegerModelField("videoMaxCount", "视频红包 | 每日最大次数", 5, 1, 50).also { videoMaxCount = it })
-        addField(IntegerModelField("videoBrowseDuration", "视频红包 | 模拟浏览时长(秒)", 30, 10, 60).also { videoBrowseDuration = it })
+        addField(IntegerModelField("videoMaxCount", "视频红包 | 每日最大次数", 10, 1, 50).also { videoMaxCount = it })
+        addField(IntegerModelField("videoBrowseDuration", "视频红包 | 模拟浏览时长(秒)", 15, 10, 60).also { videoBrowseDuration = it })
         addField(BooleanModelField("videoAutoSignIn", "视频红包 | 顺便签到", true).also { videoAutoSignIn = it })
     }
 
@@ -52,74 +54,90 @@ class BrowseVideo : ModelTask() {
 
         var success = 0; var fail = 0
 
-        // 1. 查询互动任务列表
-        val result = BrowseVideoRpcCall.queryInteractTask()
-        val json = try { JSONObject(result) } catch (_: Exception) { null }
-        if (json == null || !json.optBoolean("success")) {
-            Log.record(TAG, "查询视频任务失败")
-            return
+        // 方案A: 通过 AntFarm listFarmTask + doFarmTask 流程（已验证可行）
+        val farmResult = BrowseVideoRpcCall.listFarmTask(VERSION)
+        val farmTasks = try { JSONObject(farmResult).optJSONArray("taskInfoList") } catch (_: Exception) { null }
+
+        if (farmTasks != null && farmTasks.length() > 0) {
+            Log.record(TAG, "方案A: AntFarm 任务 ${farmTasks.length()} 个")
+            for (i in 0 until farmTasks.length()) {
+                if (success >= maxCount) break
+                try {
+                    val t = farmTasks.getJSONObject(i)
+                    val bizKey = t.optString("bizKey", "")
+                    val title = t.optString("title", bizKey)
+                    // 只处理视频类
+                    if (!bizKey.contains("VIDEO", true) && !title.contains("视频")) continue
+                    delay(RandomUtil.nextLong(2000, 5000))
+                    Log.record(TAG, "[${success + 1}] $title")
+
+                    val doResult = BrowseVideoRpcCall.doFarmTask(bizKey, VERSION)
+                    val doJson = try { JSONObject(doResult) } catch (_: Exception) { null }
+                    val videoUrl = doJson?.optString("videoUrl", "")
+                    if (videoUrl.isNotEmpty()) {
+                        val contentId = extractContentId(videoUrl)
+                        if (contentId.isNotEmpty() && ResChecker.checkRes(TAG, JSONObject(BrowseVideoRpcCall.videoDeliverModule(contentId)))) {
+                            delay(duration * 1000L)
+                            if (ResChecker.checkRes(TAG, JSONObject(BrowseVideoRpcCall.videoTrigger(contentId)))) {
+                                success++; Log.other(TAG, "视频完成🧧[$title]"); continue
+                            }
+                        }
+                    }
+                    fail++; Log.record(TAG, "方案A失败[$title]")
+                } catch (_: kotlinx.coroutines.CancellationException) { throw _
+                } catch (e: Exception) { fail++; Log.record(TAG, "异常: ${e.message}") }
+            }
         }
 
-        // 2. 顺便签到
-        if (videoAutoSignIn.value) {
+        // 方案B: 尝试 content.interact 视频红包（签到+分享可直接完成）
+        if (success < maxCount) {
             try {
-                val signResult = BrowseVideoRpcCall.signIn()
-                val signJson = JSONObject(signResult)
-                if (signJson.optBoolean("success")) {
-                    Log.other(TAG, "签到成功✅")
+                val interactResult = BrowseVideoRpcCall.queryInteractTask()
+                val json = try { JSONObject(interactResult) } catch (_: Exception) { null }
+                if (json?.optBoolean("success") == true) {
+                    // 签到
+                    if (videoAutoSignIn.value) {
+                        val signResult = BrowseVideoRpcCall.signIn()
+                        if (JSONObject(signResult).optBoolean("success")) Log.other(TAG, "签到✅")
+                    }
+                    val tasks = json.optJSONArray("taskList")
+                    if (tasks != null) {
+                        Log.record(TAG, "方案B: 内容互动任务 ${tasks.length()} 个")
+                        for (i in 0 until tasks.length()) {
+                            if (success >= maxCount) break
+                            val t = tasks.getJSONObject(i)
+                            val taskType = t.optString("taskType", "")
+                            val completed = t.optBoolean("completed", false)
+                            if (completed) continue
+                            // 只处理 signIn 和 wfDayShare（其他需要用户交互）
+                            if (taskType == "signIn") {
+                                val signR = BrowseVideoRpcCall.signIn()
+                                if (JSONObject(signR).optBoolean("success")) { success++; Log.other(TAG, "签到完成✅") }
+                            } else if (taskType == "wfDayShare") {
+                                // 分享任务 - 尝试完成 IEP
+                                val taskActivityId = t.optString("taskActivityId", "")
+                                if (taskActivityId.isNotEmpty()) {
+                                    val r = BrowseVideoRpcCall.finishIepTask(taskType, "ANTFARM", taskActivityId)
+                                    if (JSONObject(r).optBoolean("success")) { success++; Log.other(TAG, "分享任务✅") }
+                                    else fail++
+                                }
+                            }
+                            delay(RandomUtil.nextLong(1000, 3000))
+                        }
+                    }
                 }
             } catch (_: Exception) {}
         }
 
-        val taskList = json.optJSONArray("taskList") ?: return
-        Log.record(TAG, "共 ${taskList.length()} 个任务")
-
-        val traceId = json.optString("traceId", "")
-        val extInfo = json.optJSONObject("extInfo")
-        val captchaId = extInfo?.optString("captchaId", "") ?: ""
-
-        for (i in 0 until taskList.length()) {
-            if (success >= maxCount) break
-            try {
-                val task = taskList.getJSONObject(i)
-                val taskType = task.optString("taskType", "")
-
-                // 只处理 video/radicalRed 类任务
-                if (taskType != "radicalRed" && taskType != "videoTask") continue
-                if (task.optBoolean("completed")) continue
-
-                delay(RandomUtil.nextLong(2000, 5000))
-
-                val taskActivityId = task.optString("taskActivityId", "")
-                val uniqTaskId = task.optString("uniqTaskId", "")
-                val origTaskType = task.optString("origTaskType", taskType)
-                val rewardAmount = task.optJSONObject("taskData")?.optString("availableAmount", "0") ?: "0"
-                val taskDuration = task.optJSONObject("taskData")?.optInt("duration", duration) ?: duration
-
-                Log.record(TAG, "[${success + 1}/$maxCount] 视频任务: $origTaskType (${taskDuration}秒, ¥$rewardAmount)")
-
-                // 3. 模拟观看
-                val waitMs = ((taskDuration + RandomUtil.nextInt(-3, 5)) * 1000L).coerceAtLeast(5000)
-                delay(waitMs)
-
-                // 4. 触发完成
-                val triggerResult = BrowseVideoRpcCall.triggerPromoPlay(
-                    "30", origTaskType, taskActivityId, uniqTaskId
-                )
-                val triggerJson = try { JSONObject(triggerResult) } catch (_: Exception) { null }
-
-                if (triggerJson?.optBoolean("success") == true) {
-                    success++
-                    Log.other(TAG, "视频红包完成🧧[$origTaskType] +¥$rewardAmount")
-                } else {
-                    fail++
-                    Log.record(TAG, "视频任务失败[$origTaskType]: ${triggerResult.take(100)}")
-                }
-
-            } catch (e: kotlinx.coroutines.CancellationException) { throw e
-            } catch (e: Exception) { fail++; Log.record(TAG, "异常: ${e.message}") }
-        }
-
         Log.record(TAG, "视频红包完成！成功: $success, 失败: $fail")
+    }
+
+    private fun extractContentId(url: String): String {
+        return try {
+            val idx = url.indexOf("&contentId=")
+            if (idx < 0) return ""
+            val start = idx + 11; val end = url.indexOf("&", start)
+            if (end > start) url.substring(start, end) else url.substring(start)
+        } catch (_: Exception) { "" }
     }
 }

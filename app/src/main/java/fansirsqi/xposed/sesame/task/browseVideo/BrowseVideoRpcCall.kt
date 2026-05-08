@@ -85,6 +85,38 @@ object BrowseVideoRpcCall {
         )
     }
 
+    /** AntFarm 任务列表 */
+    fun listFarmTask(version: String): String {
+        return RequestManager.requestString(
+            "com.alipay.antfarm.listFarmTask",
+            "[{\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\",\"version\":\"$version\"}]"
+        )
+    }
+
+    /** AntFarm 执行任务 */
+    fun doFarmTask(bizKey: String, version: String): String {
+        return RequestManager.requestString(
+            "com.alipay.antfarm.doFarmTask",
+            "[{\"bizKey\":\"$bizKey\",\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\",\"version\":\"$version\"}]"
+        )
+    }
+
+    /** 下发视频内容 */
+    fun videoDeliverModule(bizId: String): String {
+        return RequestManager.requestString(
+            "alipay.content.reading.life.deliver.module",
+            "[{\"bizId\":\"$bizId\",\"bizType\":\"CONTENT\",\"chInfo\":\"ch_antFarm\",\"refer\":\"antFarm\",\"timestamp\":\"${System.currentTimeMillis()}\"}]"
+        )
+    }
+
+    /** 触发视频观看奖励 */
+    fun videoTrigger(bizId: String): String {
+        return RequestManager.requestString(
+            "alipay.content.reading.life.prize.trigger",
+            "[{\"bizId\":\"$bizId\",\"bizType\":\"CONTENT\",\"prizeFlowNum\":\"VIDEO_TASK\",\"prizeType\":\"farmFeed\"}]"
+        )
+    }
+
     /** 签到领取 */
     fun signIn(sceneCode: String = "ANTFARM"): String {
         return RequestManager.requestString(
