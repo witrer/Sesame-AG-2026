@@ -73,7 +73,7 @@ class BrowseVideo : ModelTask() {
 
                     val doResult = BrowseVideoRpcCall.doFarmTask(bizKey, VERSION)
                     val doJson = try { JSONObject(doResult) } catch (_: Exception) { null }
-                    val videoUrl = doJson?.optString("videoUrl", "")
+                    val videoUrl = doJson?.optString("videoUrl", "") ?: ""
                     if (videoUrl.isNotEmpty()) {
                         val contentId = extractContentId(videoUrl)
                         if (contentId.isNotEmpty() && ResChecker.checkRes(TAG, JSONObject(BrowseVideoRpcCall.videoDeliverModule(contentId)))) {
