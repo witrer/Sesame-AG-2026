@@ -59,7 +59,7 @@ object SliderBypassHelper {
     private fun hookNebulaTransActivity(loader: ClassLoader) {
         try {
             val nebulaTransClass = XposedHelpers.findClass(
-                "com.alipay.mobile.nebulax.xriver.activity.NebulaTransActivity",
+                "com.alipay.mobile.nebulax.integration.mpaas.activity.NebulaTransActivity",
                 loader
             )
             // Hook onCreate - 检测到验证页面立即 finish
