@@ -58,66 +58,47 @@ object SliderBypassHelper {
      */
     private fun hookNebulaTransActivity(loader: ClassLoader) {
         try {
-            val nebulaTransClass = XposedHelpers.findClass(
-                "com.alipay.mobile.nebulax.integration.mpaas.activity.NebulaTransActivity",
-                loader
-            )
-            // Hook onCreate - 检测到验证页面立即 finish
+            // Hook 所有 Activity 的 onCreate，检测 NebulaTransActivity 类型验证页面
             XposedHelpers.findAndHookMethod(
-                nebulaTransClass,
+                android.app.Activity::class.java,
                 "onCreate",
                 android.os.Bundle::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
                         try {
                             val activity = param.thisObject as? android.app.Activity ?: return
+                            val className = activity.javaClass.name
+                            // 只处理 NebulaTransActivity 及其内部类
+                            if (!className.contains("NebulaTransActivity")) return
+
                             val intent = activity.intent
                             val url = intent?.dataString ?: intent?.getStringExtra("url") ?: ""
 
-                            // 检测验证码/滑块 URL
-                            if (url.contains("security") ||
-                                url.contains("verify") ||
-                                url.contains("captcha") ||
-                                url.contains("slider") ||
-                                url.contains("risk") ||
-                                url.contains("safePay")
+                            if (url.contains("security") || url.contains("verify") ||
+                                url.contains("captcha") || url.contains("slider") ||
+                                url.contains("risk") || url.contains("safePay")
                             ) {
-                                Log.record(TAG, "拦截 NebulaTransActivity 验证页面: $url")
-                                // 不加载验证，直接关闭
+                                Log.record(TAG, "拦截验证页面: $className url=$url")
                                 activity.finish()
+                                return
                             }
-                        } catch (_: Throwable) {}
-                    }
-                })
 
-            // 同时 Hook onResume - 如果在 onResume 时检测到是验证页面
-            XposedHelpers.findAndHookMethod(
-                nebulaTransClass,
-                "onResume",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        try {
-                            val activity = param.thisObject as? android.app.Activity ?: return
-                            val wm = activity.windowManager
-                            // 检查 DecorView 是否包含 embeded_fragment_container (验证码容器)
-                            val decorView = activity.window?.decorView
-                            if (decorView != null) {
+                            // 也检查 embeded_fragment_container
+                            try {
+                                val decorView = activity.window?.decorView ?: return
                                 val containerId = decorView.context.resources.getIdentifier(
                                     "embeded_fragment_container", "id",
                                     "com.alipay.multiplatform.phone.xriver_integration"
                                 )
-                                if (containerId != 0) {
-                                    val container = decorView.findViewById<android.view.View>(containerId)
-                                    if (container != null) {
-                                        Log.record(TAG, "检测到验证码容器，关闭 NebulaTransActivity")
-                                        activity.finish()
-                                    }
+                                if (containerId != 0 && decorView.findViewById<android.view.View>(containerId) != null) {
+                                    Log.record(TAG, "检测到验证码容器: $className, 关闭")
+                                    activity.finish()
                                 }
-                            }
+                            } catch (_: Throwable) {}
                         } catch (_: Throwable) {}
                     }
                 })
-            Log.record(TAG, "Hook NebulaTransActivity 成功")
+            Log.record(TAG, "Hook NebulaTransActivity (via Activity.onCreate) 成功")
         } catch (e: Throwable) {
             Log.record(TAG, "Hook NebulaTransActivity 失败: ${e.message}")
         }
