@@ -253,7 +253,7 @@ object FloatingWindow {
                         // 自动捕获新 Activity
                         val entry = "[${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}] $currentActivity | ${activity.intent?.dataString ?: ""}"
                         Log.record("ActivityTrack", entry)
-                        try { captureWriter?.append(entry).append("\n").flush() } catch (_: Throwable) {}
+                        try { captureWriter?.append(entry)?.append("\n")?.flush() } catch (_: Throwable) {}
                     }
                 })
             Log.record(TAG, "Activity Hook 安装成功")

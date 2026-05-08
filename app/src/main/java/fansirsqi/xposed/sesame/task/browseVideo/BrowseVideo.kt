@@ -99,8 +99,8 @@ class BrowseVideo : ModelTask() {
                 Log.record(TAG, "[${success + 1}/$maxCount] 视频任务: $origTaskType (${taskDuration}秒, ¥$rewardAmount)")
 
                 // 3. 模拟观看
-                val waitMs = (taskDuration + RandomUtil.nextInt(-3, 5)) * 1000L
-                delay(waitMs.coerceAtLeast(5000))
+                val waitMs = ((taskDuration + RandomUtil.nextInt(-3, 5)) * 1000L).coerceAtLeast(5000)
+                delay(waitMs)
 
                 // 4. 触发完成
                 val triggerResult = BrowseVideoRpcCall.triggerPromoPlay(
