@@ -1,56 +1,66 @@
 package fansirsqi.xposed.sesame.util
 
-import java.io.File
+import de.robv.android.xposed.XSharedPreferences
+import fansirsqi.xposed.sesame.SesameApplication
 
 data class ModuleRuntimeStatus(
-    val framework: String, // "LSPatch", "LSPosed"
-    val timestamp: Long,   // 写入时间，用于判断是否是旧数据
-    val packageName: String // 来源包名，例如 com.eg.android.AlipayGphone
+    val framework: String,
+    val timestamp: Long,
+    val packageName: String
 )
 
 object StatusManager {
     private const val TAG = "StatusManager"
-    private const val STATUS_FILE_NAME = "ModuleStatus.json"
+    private const val KEY_FRAMEWORK = "status_framework"
+    private const val KEY_TIMESTAMP = "status_timestamp"
+    private const val KEY_PACKAGE = "status_package"
 
-    // 获取状态文件的位置 (与你的 Config 目录同级或在里面)
-    private fun getStatusFile(): File {
-        return File(Files.CONFIG_DIR.parentFile, STATUS_FILE_NAME)
+    /** 获取 XSharedPreferences，用于跨进程共享状态 */
+    private fun getPrefs(): XSharedPreferences {
+        val prefs = XSharedPreferences(
+            fansirsqi.xposed.sesame.data.General.MODULE_PACKAGE_NAME,
+            SesameApplication.PREFERENCES_KEY
+        )
+        prefs.makeWorldReadable()
+        return prefs
     }
 
-    /**
-     * [Hook端调用] 写入当前状态
-     */
+    /** [Hook端] 写入当前激活状态到 XSharedPreferences */
     fun updateStatus(framework: String, packageName: String) {
         try {
-            val status = ModuleRuntimeStatus(
-                framework = framework,
-                timestamp = System.currentTimeMillis(),
-                packageName = packageName
-            )
-            val json = JsonHelper.toJson(status) // 转 JSON 字符串
-            Files.write2File(json, getStatusFile())
-            Log.d(TAG, "Status updated: $framework")
+            val prefs = getPrefs()
+            prefs.reload()
+            val editor = prefs.edit()
+            editor.putString(KEY_FRAMEWORK, framework)
+            editor.putLong(KEY_TIMESTAMP, System.currentTimeMillis())
+            editor.putString(KEY_PACKAGE, packageName)
+            editor.apply()
+
+            // 同时写文件作为备份
+            try {
+                val status = ModuleRuntimeStatus(framework, System.currentTimeMillis(), packageName)
+                val json = JsonHelper.toJson(status)
+                Files.write2File(json, java.io.File(Files.CONFIG_DIR.parentFile, "ModuleStatus.json"))
+            } catch (_: Exception) {}
+
+            Log.d(TAG, "Status updated via XSharedPreferences: $framework")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write status", e)
         }
     }
 
-    /**
-     * [UI端调用] 读取状态
-     */
+    /** [UI端] 读取激活状态 */
     fun readStatus(): ModuleRuntimeStatus? {
-        try {
-            val file = getStatusFile()
-            if (!file.exists()) return null
-            // if (System.currentTimeMillis() - file.lastModified() > 5 * 60 * 1000) return null
-            val json = Files.readFromFile(file)
-            // ❌ 错误写法 (Java 风格):
-            // return JsonHelper.fromJson(json, ModuleRuntimeStatus::class.java)
-            // ✅ 正确写法 (Kotlin reified 泛型):
-            // 直接用尖括号 <类型> 指定，无需传 class 参数
-            return JsonHelper.fromJson<ModuleRuntimeStatus>(json)
+        return try {
+            val prefs = getPrefs()
+            prefs.reload()
+            val framework = prefs.getString(KEY_FRAMEWORK, null)
+            if (framework.isNullOrEmpty()) return null
+            val timestamp = prefs.getLong(KEY_TIMESTAMP, 0L)
+            val packageName = prefs.getString(KEY_PACKAGE, "") ?: ""
+            ModuleRuntimeStatus(framework, timestamp, packageName)
         } catch (e: Exception) {
-            return null
+            null
         }
     }
 }
