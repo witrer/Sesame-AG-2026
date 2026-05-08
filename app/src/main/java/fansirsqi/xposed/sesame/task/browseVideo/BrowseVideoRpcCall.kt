@@ -1,97 +1,90 @@
 package fansirsqi.xposed.sesame.task.browseVideo
 
 import fansirsqi.xposed.sesame.hook.RequestManager
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * 浏览视频领红包 RPC 调用类
- * 用于自动完成支付宝「看视频领红包」每日任务
+ * 使用支付宝真实的广告任务和内容浏览接口
  */
 object BrowseVideoRpcCall {
 
-    private const val VERSION = "1.0"
-
     /**
-     * 查询每日浏览任务列表
-     * @return 响应字符串
+     * 执行 AntFarm 日常任务（可用于视频/浏览类任务）
+     * @param bizKey 任务业务Key，如 "WATCH_VIDEO", "BROWSE_CONTENT" 等
      */
-    fun queryTaskList(): String {
+    fun doFarmTask(bizKey: String, version: String): String {
         return RequestManager.requestString(
-            "com.alipay.adexchange.ad.facade.xlightPlugin",
-            "[{\"action\":\"queryTaskList\",\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "com.alipay.antfarm.doFarmTask",
+            "[{\"bizKey\":\"$bizKey\",\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\",\"version\":\"$version\"}]"
         )
     }
 
     /**
-     * 完成任务上报 - 通用浏览任务
-     * @param taskId 任务ID
-     * @param taskType 任务类型
-     * @return 响应字符串
+     * 完成广告互动任务
      */
-    fun reportBrowseComplete(taskId: String, taskType: String): String {
+    fun finishAdTask(playBizId: String, playEventInfo: String, iepTaskType: String, iepTaskSceneCode: String): String {
+        val extendInfo = JSONObject().apply {
+            put("iepTaskSceneCode", iepTaskSceneCode)
+            put("iepTaskType", iepTaskType)
+            put("playEndingStatus", "success")
+        }
+        val args = JSONObject().apply {
+            put("extendInfo", extendInfo)
+            put("playBizId", playBizId)
+            put("playEventInfo", playEventInfo)
+            put("source", "adx")
+        }
         return RequestManager.requestString(
-            "com.alipay.adexchange.ad.facade.xlightPlugin",
-            "[{\"action\":\"report\",\"taskId\":\"$taskId\",\"taskType\":\"$taskType\",\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "com.alipay.adtask.biz.mobilegw.service.interaction.finish",
+            "[$args]"
         )
     }
 
     /**
-     * 领取浏览奖励
-     * @param taskId 任务ID
-     * @return 响应字符串
+     * 完成普通任务
      */
-    fun receiveReward(taskId: String): String {
+    fun finishIepTask(taskType: String, sceneCode: String, outBizNo: String): String {
+        val args = JSONObject().apply {
+            put("outBizNo", outBizNo)
+            put("requestType", "RPC")
+            put("sceneCode", sceneCode)
+            put("source", "ADBASICLIB")
+            put("taskType", taskType)
+        }
         return RequestManager.requestString(
-            "com.alipay.adexchange.ad.facade.xlightPlugin",
-            "[{\"action\":\"receiveReward\",\"taskId\":\"$taskId\",\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "com.alipay.antiep.finishTask",
+            "[$args]"
         )
     }
 
     /**
-     * 查询红包奖励金额
-     * @return 响应字符串
+     * 查询视频Tab URL（获取视频内容）
      */
-    fun queryRedPacketAmount(): String {
+    fun queryTabVideoUrl(version: String): String {
         return RequestManager.requestString(
-            "com.alipay.adexchange.ad.facade.xlightPlugin",
-            "[{\"action\":\"queryAmount\",\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "com.alipay.antfarm.queryTabVideoUrl",
+            "[{\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\",\"version\":\"$version\"}]"
         )
     }
 
     /**
-     * 查询内容浏览任务
-     * @return 响应字符串
+     * 内容阅读 - 下发内容模块
      */
-    fun queryContentTasks(): String {
+    fun videoDeliverModule(bizId: String): String {
         return RequestManager.requestString(
-            "alipay.content.browse.task.query",
-            "[{\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "alipay.content.reading.life.deliver.module",
+            "[{\"bizId\":\"$bizId\",\"bizType\":\"CONTENT\",\"chInfo\":\"ch_antFarm\",\"refer\":\"antFarm\",\"timestamp\":\"${System.currentTimeMillis()}\"}]"
         )
     }
 
     /**
-     * 完成内容浏览任务
-     * @param contentId 内容ID
-     * @param duration 浏览时长(秒)
-     * @return 响应字符串
+     * 内容阅读 - 触发奖励
      */
-    fun finishContentTask(contentId: String, duration: Int): String {
+    fun videoTrigger(bizId: String): String {
         return RequestManager.requestString(
-            "alipay.content.browse.task.finish",
-            "[{\"contentId\":\"$contentId\",\"duration\":$duration,\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
-        )
-    }
-
-    /**
-     * 领取内容浏览奖励
-     * @param taskId 任务ID
-     * @return 响应字符串
-     */
-    fun receiveContentReward(taskId: String): String {
-        return RequestManager.requestString(
-            "alipay.content.browse.task.receiveReward",
-            "[{\"taskId\":\"$taskId\",\"systemType\":\"android\",\"version\":\"$VERSION\"}]"
+            "alipay.content.reading.life.prize.trigger",
+            "[{\"bizId\":\"$bizId\",\"bizType\":\"CONTENT\",\"prizeFlowNum\":\"VIDEO_TASK\",\"prizeType\":\"farmFeed\"}]"
         )
     }
 }
