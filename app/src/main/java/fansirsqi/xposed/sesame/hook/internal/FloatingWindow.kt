@@ -136,7 +136,22 @@ object FloatingWindow {
         panel.addView(row1)
 
         val row2 = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(0, dp2px(6, dp), 0, 0) }
-        row2.addView(addBtn("▶️ 跑任务", Color.parseColor("#2E7D32")) { ApplicationHook.execHandler() })
+        row2.addView(addBtn("🧧 刷视频", Color.parseColor("#2E7D32")) {
+            // 直接触发视频红包任务
+            kotlinx.coroutines.GlobalScope.launch {
+                try {
+                    val inst = fansirsqi.xposed.sesame.task.browseVideo.BrowseVideo.instance
+                    if (inst != null) {
+                        inst.runSuspend()
+                        handler.post { Toast.makeText(ctx, "视频红包任务已执行", Toast.LENGTH_SHORT).show() }
+                    } else {
+                        handler.post { Toast.makeText(ctx, "视频红包模块未加载，请先开启", Toast.LENGTH_SHORT).show() }
+                    }
+                } catch (e: Exception) {
+                    handler.post { Toast.makeText(ctx, "执行失败: ${e.message}", Toast.LENGTH_SHORT).show() }
+                }
+            }
+        })
         row2.addView(Space(ctx).apply { layoutParams = LinearLayout.LayoutParams(dp2px(8, dp), 0) })
         row2.addView(addBtn("✕ 关闭", Color.GRAY) { hidePanel() })
         panel.addView(row2)

@@ -42,7 +42,10 @@ object SliderBypassHelper {
             // 3. Hook 安全验证 H5 - H5BasePage 实现类
             hookSecurityVerification(loader)
 
-            // 4. Hook 风险提示弹窗
+            // 4. Hook antcaptcha.verify - 绕过滑块验证 RPC
+            hookAntCaptcha(loader)
+
+            // 5. Hook 风险提示弹窗
             hookRiskDialog(loader)
 
             hookInstalled = true
@@ -225,6 +228,52 @@ object SliderBypassHelper {
             }
         } catch (e: Throwable) {
             Log.record(TAG, "Hook 安全验证页面失败: ${e.message}")
+        }
+    }
+
+    /**
+     * Hook alipay.security.antcaptcha.verify - 滑块验证 RPC 绕过
+     * 拦截 RpcBridgeExtension.rpc() 中 method=antcaptcha.verify 的调用
+     */
+    private fun hookAntCaptcha(loader: ClassLoader) {
+        try {
+            val bridgeClass = XposedHelpers.findClass(
+                "com.alipay.mobile.nebulaappproxy.api.rpc.H5RpcUtil", loader
+            )
+            XposedHelpers.findAndHookMethod(
+                bridgeClass, "rpcCall",
+                String::class.java, String::class.java, String::class.java,
+                java.lang.Boolean.TYPE,
+                loader.loadClass("com.alibaba.fastjson.JSONObject"),
+                String::class.java, java.lang.Boolean.TYPE,
+                loader.loadClass("com.alipay.mobile.h5container.api.H5Page"),
+                Integer.TYPE, String::class.java, java.lang.Boolean.TYPE,
+                Integer.TYPE, String::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val method = param.args[0] as? String ?: return
+                        if (method.contains("antcaptcha")) {
+                            Log.record(TAG, "拦截 antcaptcha 验证请求: $method")
+                            // 构造假成功响应
+                            try {
+                                val respClass = loader.loadClass("com.alipay.mobile.nebulaappproxy.api.rpc.H5Response")
+                                val fakeResp = respClass.newInstance()
+                                val jsonClass = loader.loadClass("com.alibaba.fastjson.JSONObject")
+                                val fakeJson = jsonClass.newInstance()
+                                jsonClass.getMethod("put", String::class.java, Object::class.java)
+                                    .invoke(fakeJson, "success", true)
+                                jsonClass.getMethod("put", String::class.java, Object::class.java)
+                                    .invoke(fakeJson, "resultData", "{}")
+                                respClass.getMethod("setResponse", String::class.java)
+                                    .invoke(fakeResp, fakeJson.toString())
+                                param.result = fakeResp
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                })
+            Log.record(TAG, "Hook antcaptcha.verify 成功")
+        } catch (e: Throwable) {
+            Log.record(TAG, "Hook antcaptcha.verify 失败: ${e.message}")
         }
     }
 
