@@ -104,7 +104,7 @@ class BrowseVideo : ModelTask() {
 
                 // 4. 触发完成
                 val triggerResult = BrowseVideoRpcCall.triggerPromoPlay(
-                    30, origTaskType, taskActivityId, uniqTaskId
+                    "30", origTaskType, taskActivityId, uniqTaskId
                 )
                 val triggerJson = try { JSONObject(triggerResult) } catch (_: Exception) { null }
 
