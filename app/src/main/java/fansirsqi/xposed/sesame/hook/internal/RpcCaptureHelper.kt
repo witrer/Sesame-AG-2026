@@ -56,16 +56,17 @@ object RpcCaptureHelper {
         capturedRpcs.clear()
     }
 
-    /** 安装 RPC 拦截 Hook */
+    /** 安装 RPC 拦截 Hook - 同时覆盖新旧两条 RPC 通道 */
     fun installRpcCaptureHooks() {
         if (hookInstalled) return
         val loader = classLoader ?: return
+
+        // 1. Hook 新版 RPC: RpcBridgeExtension.rpc()
         try {
             val bridgeClass = XposedHelpers.findClass(
                 "com.alibaba.ariver.commonability.network.rpc.RpcBridgeExtension", loader
             )
             val jsonClass = Class.forName("com.alibaba.fastjson.JSONObject", false, loader)
-
             XposedHelpers.findAndHookMethod(
                 bridgeClass, "rpc",
                 String::class.java, java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
@@ -76,38 +77,91 @@ object RpcCaptureHelper {
                 XposedHelpers.findClass("com.alibaba.ariver.app.api.Page", loader),
                 XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.model.ApiContext", loader),
                 XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.extension.BridgeCallback", loader),
+                createRpcHook()
+            )
+            Log.record(TAG, "新RPC Hook 安装成功")
+        } catch (e: Throwable) {
+            Log.record(TAG, "新RPC Hook 失败: ${e.message}")
+        }
+
+        // 2. Hook 旧版 RPC: H5RpcUtil.rpcCall()
+        try {
+            val h5RpcUtilClass = XposedHelpers.findClass(
+                "com.alipay.mobile.nebulaappproxy.api.rpc.H5RpcUtil", loader
+            )
+            val h5PageClass = XposedHelpers.findClass(
+                "com.alipay.mobile.h5container.api.H5Page", loader
+            )
+            XposedHelpers.findAndHookMethod(
+                h5RpcUtilClass, "rpcCall",
+                String::class.java, String::class.java, String::class.java,
+                java.lang.Boolean.TYPE,
+                loader.loadClass("com.alibaba.fastjson.JSONObject"),
+                String::class.java, java.lang.Boolean.TYPE,
+                h5PageClass, Integer.TYPE,
+                String::class.java, java.lang.Boolean.TYPE,
+                Integer.TYPE, String::class.java,
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         if (!isRecording) return
                         try {
                             val method = param.args[0] as? String ?: return
-                            val params = param.args[4]
-                            val data = if (params != null) params.toString() else "null"
+                            val args = param.args[1] as? String ?: "null"
                             val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                            addEntry("[$ts] REQ $method\n  $data")
+                            addEntry("[$ts] OLD_REQ $method\n  $args")
                         } catch (_: Throwable) {}
                     }
                     override fun afterHookedMethod(param: MethodHookParam) {
                         if (!isRecording) return
                         try {
                             val method = param.args[0] as? String ?: return
-                            val cb = param.args[15] ?: return
-                            val respField = cb.javaClass.getDeclaredField("mJSONResponse")
-                            respField.isAccessible = true
-                            val resp = respField.get(cb)
-                            if (resp != null) {
+                            val result = param.result
+                            if (result != null) {
                                 val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                                val data = resp.toString()
-                                val short = if (data.length > 800) data.take(800) + "..." else data
-                                addEntry("[$ts] RES $method\n  $short")
+                                val respClass = result.javaClass
+                                val getResponse = respClass.getMethod("getResponse")
+                                val resp = getResponse.invoke(result) as? String ?: return
+                                val short = if (resp.length > 800) resp.take(800) + "..." else resp
+                                addEntry("[$ts] OLD_RES $method\n  $short")
                             }
                         } catch (_: Throwable) {}
                     }
                 })
-            hookInstalled = true
-            Log.record(TAG, "RPC 抓包 Hook 安装成功")
+            Log.record(TAG, "旧RPC Hook 安装成功")
         } catch (e: Throwable) {
-            Log.record(TAG, "RPC 抓包 Hook 安装失败: ${e.message}")
+            Log.record(TAG, "旧RPC Hook 失败: ${e.message}")
+        }
+
+        hookInstalled = true
+        Log.record(TAG, "RPC 抓包 Hook 安装完成")
+    }
+
+    private fun createRpcHook() = object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            if (!isRecording) return
+            try {
+                val method = param.args[0] as? String ?: return
+                val params = param.args[4]
+                val data = if (params != null) params.toString() else "null"
+                val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+                addEntry("[$ts] NEW_REQ $method\n  $data")
+            } catch (_: Throwable) {}
+        }
+        override fun afterHookedMethod(param: MethodHookParam) {
+            if (!isRecording) return
+            try {
+                val method = param.args[0] as? String ?: return
+                val cb = param.args[15] ?: return
+                val respField = cb.javaClass.getDeclaredField("mJSONResponse")
+                respField.isAccessible = true
+                val resp = respField.get(cb)
+                if (resp != null) {
+                    val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+                    val data = resp.toString()
+                    val short = if (data.length > 800) data.take(800) + "..." else data
+                    addEntry("[$ts] NEW_RES $method\n  $short")
+                }
+            } catch (_: Throwable) {}
         }
     }
 
