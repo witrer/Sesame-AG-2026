@@ -36,7 +36,7 @@ object SliderBypassHelper {
             // 1. Hook RPC 安全联署 - 自动提供有效签名
             hookRpcSecurityCountersign(loader)
 
-            // 2. Hook 安全验证页面 - 自动跳过滑块
+            // 2. Hook 安全验证页面 - 使用 H5BasePage 具体实现类
             hookSecurityVerification(loader)
 
             // 3. Hook 风险提示 - 防止弹窗
@@ -111,34 +111,63 @@ object SliderBypassHelper {
      */
     private fun hookSecurityVerification(loader: ClassLoader) {
         try {
-            // Hook 安全验证相关的 WebView/H5 页面自动关闭
-            val h5PageClass = XposedHelpers.findClass(
-                "com.alipay.mobile.h5container.api.H5Page",
-                loader
-            )
-
-            // 拦截 H5Page.exitPage() - 如果页面是安全验证，自动关闭
-            XposedHelpers.findAndHookMethod(
-                h5PageClass,
-                "loadUrl",
-                String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val url = param.args[0] as? String ?: return
-                        // 检测是否是安全验证 URL
-                        if (url.contains("securityVerify") ||
-                            url.contains("slidingVerify") ||
-                            url.contains("captcha") ||
-                            url.contains("riskVerify") ||
-                            url.contains("ariver/verify")
-                        ) {
-                            Log.record(TAG, "拦截安全验证页面: $url")
-                            // 不加载安全验证页面，返回空
-                            param.result = null
+            // 使用 H5BasePage 具体实现类（H5Page 是接口，不能直接 Hook）
+            var hooked = false
+            // 尝试 H5BasePage
+            try {
+                XposedHelpers.findAndHookMethod(
+                    "com.alipay.mobile.nebula.basebridge.H5BasePage",
+                    loader,
+                    "loadUrl",
+                    String::class.java,
+                    object : XC_MethodHook() {
+                        override fun beforeHookedMethod(param: MethodHookParam) {
+                            val url = param.args[0] as? String ?: return
+                            if (url.contains("securityVerify") ||
+                                url.contains("slidingVerify") ||
+                                url.contains("captcha") ||
+                                url.contains("riskVerify") ||
+                                url.contains("ariver/verify")
+                            ) {
+                                Log.record(TAG, "H5BasePage 拦截安全验证页面: $url")
+                                param.result = null
+                            }
                         }
-                    }
-                })
-            Log.record(TAG, "Hook 安全验证页面成功")
+                    })
+                hooked = true
+                Log.record(TAG, "Hook H5BasePage.loadUrl 成功")
+            } catch (_: Throwable) {}
+
+            // 备用：尝试 H5WebView 的 loadUrl
+            if (!hooked) {
+                try {
+                    XposedHelpers.findAndHookMethod(
+                        "com.alipay.mobile.nebulacore.web.H5WebView",
+                        loader,
+                        "loadUrl",
+                        String::class.java,
+                        object : XC_MethodHook() {
+                            override fun beforeHookedMethod(param: MethodHookParam) {
+                                val url = param.args[0] as? String ?: return
+                                if (url.contains("securityVerify") ||
+                                    url.contains("slidingVerify") ||
+                                    url.contains("captcha") ||
+                                    url.contains("riskVerify") ||
+                                    url.contains("ariver/verify")
+                                ) {
+                                    Log.record(TAG, "H5WebView 拦截安全验证页面: $url")
+                                    param.result = null
+                                }
+                            }
+                        })
+                    hooked = true
+                    Log.record(TAG, "Hook H5WebView.loadUrl 成功")
+                } catch (_: Throwable) {}
+            }
+
+            if (!hooked) {
+                Log.record(TAG, "Hook 安全验证页面失败: 未找到可用的实现类")
+            }
         } catch (e: Throwable) {
             Log.record(TAG, "Hook 安全验证页面失败: ${e.message}")
         }
