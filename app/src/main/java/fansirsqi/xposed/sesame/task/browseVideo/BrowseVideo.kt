@@ -96,7 +96,7 @@ class BrowseVideo : ModelTask() {
                 val rewardAmount = task.optJSONObject("taskData")?.optString("availableAmount", "0") ?: "0"
                 val taskDuration = task.optJSONObject("taskData")?.optInt("duration", duration) ?: duration
 
-                Log.record(TAG, "[${success + 1}/$maxCount] 视频任务: $origTaskType ($taskDuration秒, ¥$rewardAmount)")
+                Log.record(TAG, "[${success + 1}/$maxCount] 视频任务: $origTaskType (${taskDuration}秒, ¥$rewardAmount)")
 
                 // 3. 模拟观看
                 val waitMs = (taskDuration + RandomUtil.nextInt(-3, 5)) * 1000L
