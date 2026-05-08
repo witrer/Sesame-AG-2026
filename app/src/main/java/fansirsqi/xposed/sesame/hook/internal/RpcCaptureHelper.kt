@@ -33,17 +33,8 @@ object RpcCaptureHelper {
 
     fun init(loader: ClassLoader) {
         classLoader = loader
-        // 启动时检查触发文件
-        checkTriggerFile()
-    }
-
-    /** 通过文件触发：创建 sesame-TK/capture_trigger 文件开始录制，删除文件停止录制 */
-    fun checkTriggerFile() {
-        if (triggerFile.exists()) {
-            if (!isRecording) startRecording()
-        } else {
-            if (isRecording) stopRecording()
-        }
+        // 自动开始录制（通过 capture_trigger 文件控制停止）
+        startRecording()
     }
 
     fun startRecording() {
