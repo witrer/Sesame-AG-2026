@@ -32,6 +32,7 @@ import fansirsqi.xposed.sesame.hook.internal.AlipayMiniMarkHelper
 import fansirsqi.xposed.sesame.hook.internal.LocationHelper
 import fansirsqi.xposed.sesame.hook.internal.AuthCodeHelper
 import fansirsqi.xposed.sesame.hook.internal.SecurityBodyHelper
+import fansirsqi.xposed.sesame.hook.internal.RpcCaptureHelper
 import fansirsqi.xposed.sesame.hook.internal.SliderBypassHelper
 import fansirsqi.xposed.sesame.hook.keepalive.SmartSchedulerManager
 import fansirsqi.xposed.sesame.hook.keepalive.SmartSchedulerManager.cleanup
@@ -236,6 +237,9 @@ class ApplicationHook {
                         // 初始化滑块绕过
                         SliderBypassHelper.init(classLoader!!)
                         SliderBypassHelper.installAllHooks()
+                        // 初始化 RPC 抓包（录制模式需手动触发）
+                        RpcCaptureHelper.init(classLoader!!)
+                        RpcCaptureHelper.installRpcCaptureHooks()
 
                         initVersionInfo(packageName)
                         loadLibs()
@@ -383,6 +387,11 @@ class ApplicationHook {
 
                 BroadcastActions.RE_LOGIN -> reOpenApp()
                 BroadcastActions.RPC_TEST -> handleRpcTest(intent)
+                "com.eg.android.AlipayGphone.sesame.capture_start",
+                "com.eg.android.AlipayGphone.sesame.capture_stop" -> {
+                    RpcCaptureHelper.handleBroadcast(action)
+                }
+
                 BroadcastActions.MANUAL_TASK -> {
                     record(TAG, "🚀 收到手动庄园任务指令")
                     execute {
@@ -852,6 +861,8 @@ class ApplicationHook {
                 filter.addAction(BroadcastActions.RE_LOGIN)
                 filter.addAction(BroadcastActions.STATUS)
                 filter.addAction(BroadcastActions.RPC_TEST)
+                filter.addAction("com.eg.android.AlipayGphone.sesame.capture_start")
+                filter.addAction("com.eg.android.AlipayGphone.sesame.capture_stop")
                 filter.addAction(BroadcastActions.MANUAL_TASK)
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
