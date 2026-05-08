@@ -27,9 +27,6 @@ object RpcCaptureHelper {
     private val capturedRpcs = mutableListOf<String>()
     private lateinit var captureFile: File
     private var hookInstalled = false
-    private val triggerFile: File by lazy {
-        File(Files.CONFIG_DIR.parentFile, "capture_trigger")
-    }
 
     fun init(loader: ClassLoader) {
         classLoader = loader
@@ -81,7 +78,6 @@ object RpcCaptureHelper {
                 XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.extension.BridgeCallback", loader),
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
-                        checkTriggerFile()  // 每次RPC调用前检查触发文件
                         if (!isRecording) return
                         try {
                             val method = param.args[0] as? String ?: return
