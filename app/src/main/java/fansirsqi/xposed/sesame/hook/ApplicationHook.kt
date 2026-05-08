@@ -192,9 +192,10 @@ class ApplicationHook {
     }
 
     private fun shouldHookProcess(): Boolean {
-        val isMainProcess = General.PACKAGE_NAME == finalProcessName
-        return isMainProcess
-//            record(TAG, "跳过辅助进程: $finalProcessName")
+        // 允许所有进程（scope.list 已限定支付宝），避免因进程名不完全匹配导致模块无法激活
+        if (finalProcessName == null) return true
+        record(TAG, "当前进程: $finalProcessName")
+        return true
     }
 
     private fun initReflection(loader: ClassLoader) {
