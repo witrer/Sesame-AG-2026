@@ -31,14 +31,17 @@ object RpcCaptureHelper {
     fun startRecording() {
         if (isRecording) return
         isRecording = true
-        val file = File(Files.CONFIG_DIR.parentFile,
-            "rpc_capture_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.txt")
+        val dir = android.os.Environment.getExternalStorageDirectory().toString() +
+                "/Android/media/com.eg.android.AlipayGphone/sesame-TK"
+        val file = File(dir, "rpc_cap_${SimpleDateFormat("HHmmss", Locale.getDefault()).format(Date())}.txt")
         try {
+            if (!file.parentFile!!.exists()) file.parentFile!!.mkdirs()
             writer = FileWriter(file, true)
-            Log.record(TAG, "🔴 开始录制 RPC → ${file.name}")
-            write("=== RPC Capture Started ===\n")
+            Log.record(TAG, "🔴 录制 → ${file.absolutePath}")
+            write("=== START ===\n")
         } catch (e: Exception) {
             Log.error(TAG, "创建文件失败: ${e.message}")
+            Log.printStackTrace(TAG, e)
         }
     }
 
