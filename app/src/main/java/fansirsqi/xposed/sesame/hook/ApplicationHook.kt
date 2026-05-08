@@ -387,10 +387,6 @@ class ApplicationHook {
 
                 BroadcastActions.RE_LOGIN -> reOpenApp()
                 BroadcastActions.RPC_TEST -> handleRpcTest(intent)
-                "com.eg.android.AlipayGphone.sesame.capture_start",
-                "com.eg.android.AlipayGphone.sesame.capture_stop" -> {
-                    RpcCaptureHelper.handleBroadcast(action)
-                }
 
                 BroadcastActions.MANUAL_TASK -> {
                     record(TAG, "🚀 收到手动庄园任务指令")
@@ -861,8 +857,6 @@ class ApplicationHook {
                 filter.addAction(BroadcastActions.RE_LOGIN)
                 filter.addAction(BroadcastActions.STATUS)
                 filter.addAction(BroadcastActions.RPC_TEST)
-                filter.addAction("com.eg.android.AlipayGphone.sesame.capture_start")
-                filter.addAction("com.eg.android.AlipayGphone.sesame.capture_stop")
                 filter.addAction(BroadcastActions.MANUAL_TASK)
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
