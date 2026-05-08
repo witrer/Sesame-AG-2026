@@ -5,9 +5,9 @@ import fansirsqi.xposed.sesame.model.ModelGroup
 import fansirsqi.xposed.sesame.model.modelFieldExt.BooleanModelField
 import fansirsqi.xposed.sesame.model.modelFieldExt.IntegerModelField
 import fansirsqi.xposed.sesame.task.ModelTask
-import fansirsqi.xposed.sesame.util.JsonUtil
 import fansirsqi.xposed.sesame.util.Log
 import fansirsqi.xposed.sesame.util.RandomUtil
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 /**
@@ -25,7 +25,6 @@ class BrowseVideo : ModelTask() {
             private set
     }
 
-    // 配置字段
     private lateinit var videoAutoBrowse: BooleanModelField
     private lateinit var videoMaxCount: IntegerModelField
     private lateinit var videoBrowseDuration: IntegerModelField
@@ -73,7 +72,7 @@ class BrowseVideo : ModelTask() {
         super.destroy()
     }
 
-    override fun run() {
+    override suspend fun runSuspend() {
         if (!videoAutoBrowse.value) {
             Log.record(TAG, "视频红包自动浏览未开启")
             return
@@ -88,9 +87,8 @@ class BrowseVideo : ModelTask() {
 
         for (i in 1..maxCount) {
             try {
-                Thread.sleep(RandomUtil.nextLong(2000, 5000))
+                delay(RandomUtil.nextLong(2000, 5000))
 
-                // 1. 查询任务
                 val taskResult = queryAndGetTask()
                 if (taskResult == null) {
                     failCount++
@@ -106,21 +104,18 @@ class BrowseVideo : ModelTask() {
                     continue
                 }
 
-                // 2. 模拟浏览
                 val duration = browseDuration + RandomUtil.nextInt(-3, 3)
                 Log.record(TAG, "[$i/$maxCount] 模拟浏览: ${duration}秒")
-                Thread.sleep(duration * 1000L)
+                delay(duration * 1000L)
 
-                // 3. 完成任务
                 if (contentId.isNotEmpty()) {
                     BrowseVideoRpcCall.finishContentTask(contentId, duration)
                 } else {
                     BrowseVideoRpcCall.reportBrowseComplete(taskId, "browse")
                 }
 
-                // 4. 领取奖励
                 if (videoAutoClaim.value) {
-                    Thread.sleep(RandomUtil.nextLong(1000, 3000))
+                    delay(RandomUtil.nextLong(1000, 3000))
                     val rewardResult = BrowseVideoRpcCall.receiveReward(taskId)
                     if (rewardResult.isNotEmpty()) {
                         val rewardJson = try { JSONObject(rewardResult) } catch (_: Exception) { null }
@@ -134,9 +129,9 @@ class BrowseVideo : ModelTask() {
                 successCount++
                 Log.record(TAG, "[$i/$maxCount] 视频任务完成")
 
-            } catch (e: InterruptedException) {
+            } catch (e: kotlinx.coroutines.CancellationException) {
                 Log.record(TAG, "视频浏览任务被中断")
-                break
+                throw e
             } catch (e: Exception) {
                 failCount++
                 Log.record(TAG, "[$i/$maxCount] 视频任务异常: ${e.message}")
@@ -146,12 +141,8 @@ class BrowseVideo : ModelTask() {
         Log.record(TAG, "视频红包任务完成！成功: $successCount, 失败: $failCount")
     }
 
-    /**
-     * 查询并获取一个可执行的任务
-     */
     private fun queryAndGetTask(): JSONObject? {
         return try {
-            // 先尝试内容浏览任务
             if (videoContentTask.value) {
                 val response = BrowseVideoRpcCall.queryContentTasks()
                 if (response.isNotEmpty()) {
@@ -163,7 +154,6 @@ class BrowseVideo : ModelTask() {
                 }
             }
 
-            // 备用：广告浏览任务
             val response = BrowseVideoRpcCall.queryTaskList()
             if (response.isNotEmpty()) {
                 val json = try { JSONObject(response) } catch (_: Exception) { null }
