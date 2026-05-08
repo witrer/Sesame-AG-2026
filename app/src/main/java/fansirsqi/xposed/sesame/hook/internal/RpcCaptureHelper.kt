@@ -2,58 +2,64 @@ package fansirsqi.xposed.sesame.hook.internal
 
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
-import fansirsqi.xposed.sesame.hook.ApplicationHook
 import fansirsqi.xposed.sesame.util.Files
 import fansirsqi.xposed.sesame.util.Log
 import java.io.File
+import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * RPC 数据抓包助手
- * 通过广播触发录制：com.eg.android.AlipayGphone.sesame.capture_start / capture_stop
- * 录制文件保存在 sesame-TK 目录下 rpc_capture_*.txt
+ * RPC 数据抓包助手 - 同时 Hook 新旧 RPC 通道，实时写入文件
  */
 object RpcCaptureHelper {
 
     private const val TAG = "RpcCapture"
-    private const val BROADCAST_START = "com.eg.android.AlipayGphone.sesame.capture_start"
-    private const val BROADCAST_STOP = "com.eg.android.AlipayGphone.sesame.capture_stop"
-
     private var classLoader: ClassLoader? = null
     @Volatile var isRecording = false
         private set
-    private val capturedRpcs = mutableListOf<String>()
-    private lateinit var captureFile: File
+    private var writer: FileWriter? = null
     private var hookInstalled = false
 
     fun init(loader: ClassLoader) {
         classLoader = loader
-        // 自动开始录制（通过 capture_trigger 文件控制停止）
         startRecording()
     }
 
+    @Synchronized
     fun startRecording() {
         if (isRecording) return
         isRecording = true
-        captureFile = File(Files.CONFIG_DIR.parentFile,
+        val file = File(Files.CONFIG_DIR.parentFile,
             "rpc_capture_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.txt")
-        capturedRpcs.clear()
-        Log.record(TAG, "🔴 开始录制 RPC → ${captureFile.name}")
+        try {
+            writer = FileWriter(file, true)
+            Log.record(TAG, "🔴 开始录制 RPC → ${file.name}")
+            write("=== RPC Capture Started ===\n")
+        } catch (e: Exception) {
+            Log.error(TAG, "创建文件失败: ${e.message}")
+        }
     }
 
+    @Synchronized
     fun stopRecording() {
         if (!isRecording) return
         isRecording = false
         try {
-            val content = capturedRpcs.joinToString("\n")
-            Files.write2File(content, captureFile)
-            Log.record(TAG, "⚪ 停止录制，${capturedRpcs.size} 条记录 → ${captureFile.name}")
-        } catch (e: Exception) {
-            Log.error(TAG, "保存失败: ${e.message}")
-        }
-        capturedRpcs.clear()
+            write("=== RPC Capture Stopped ===\n")
+            writer?.flush()
+            writer?.close()
+        } catch (_: Throwable) {}
+        writer = null
+        Log.record(TAG, "⚪ 停止录制")
+    }
+
+    @Synchronized
+    private fun write(text: String) {
+        try {
+            writer?.append(text)?.flush()
+        } catch (_: Throwable) {}
     }
 
     /** 安装 RPC 拦截 Hook - 同时覆盖新旧两条 RPC 通道 */
@@ -61,7 +67,7 @@ object RpcCaptureHelper {
         if (hookInstalled) return
         val loader = classLoader ?: return
 
-        // 1. Hook 新版 RPC: RpcBridgeExtension.rpc()
+        // 1. 新版 RPC: RpcBridgeExtension.rpc()
         try {
             val bridgeClass = XposedHelpers.findClass(
                 "com.alibaba.ariver.commonability.network.rpc.RpcBridgeExtension", loader
@@ -77,14 +83,14 @@ object RpcCaptureHelper {
                 XposedHelpers.findClass("com.alibaba.ariver.app.api.Page", loader),
                 XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.model.ApiContext", loader),
                 XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.extension.BridgeCallback", loader),
-                createRpcHook()
+                createNewRpcHook()
             )
             Log.record(TAG, "新RPC Hook 安装成功")
         } catch (e: Throwable) {
             Log.record(TAG, "新RPC Hook 失败: ${e.message}")
         }
 
-        // 2. Hook 旧版 RPC: H5RpcUtil.rpcCall()
+        // 2. 旧版 RPC: H5RpcUtil.rpcCall()
         try {
             val h5RpcUtilClass = XposedHelpers.findClass(
                 "com.alipay.mobile.nebulaappproxy.api.rpc.H5RpcUtil", loader
@@ -101,82 +107,62 @@ object RpcCaptureHelper {
                 h5PageClass, Integer.TYPE,
                 String::class.java, java.lang.Boolean.TYPE,
                 Integer.TYPE, String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        if (!isRecording) return
-                        try {
-                            val method = param.args[0] as? String ?: return
-                            val args = param.args[1] as? String ?: "null"
-                            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                            addEntry("[$ts] OLD_REQ $method\n  $args")
-                        } catch (_: Throwable) {}
-                    }
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (!isRecording) return
-                        try {
-                            val method = param.args[0] as? String ?: return
-                            val result = param.result
-                            if (result != null) {
-                                val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                                val respClass = result.javaClass
-                                val getResponse = respClass.getMethod("getResponse")
-                                val resp = getResponse.invoke(result) as? String ?: return
-                                val short = if (resp.length > 800) resp.take(800) + "..." else resp
-                                addEntry("[$ts] OLD_RES $method\n  $short")
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                })
+                createOldRpcHook()
+            )
             Log.record(TAG, "旧RPC Hook 安装成功")
         } catch (e: Throwable) {
             Log.record(TAG, "旧RPC Hook 失败: ${e.message}")
         }
 
         hookInstalled = true
-        Log.record(TAG, "RPC 抓包 Hook 安装完成")
     }
 
-    private fun createRpcHook() = object : XC_MethodHook() {
+    private fun createNewRpcHook() = object : XC_MethodHook() {
         override fun beforeHookedMethod(param: MethodHookParam) {
-            if (!isRecording) return
+            if (!isRecording || writer == null) return
             try {
                 val method = param.args[0] as? String ?: return
-                val params = param.args[4]
-                val data = if (params != null) params.toString() else "null"
-                val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                addEntry("[$ts] NEW_REQ $method\n  $data")
+                val params = param.args[4]?.toString() ?: "null"
+                val ts = now()
+                write("[$ts] NEW_REQ $method\n  $params\n")
             } catch (_: Throwable) {}
         }
         override fun afterHookedMethod(param: MethodHookParam) {
-            if (!isRecording) return
+            if (!isRecording || writer == null) return
             try {
                 val method = param.args[0] as? String ?: return
                 val cb = param.args[15] ?: return
                 val respField = cb.javaClass.getDeclaredField("mJSONResponse")
                 respField.isAccessible = true
-                val resp = respField.get(cb)
+                val resp = respField.get(cb)?.toString()
                 if (resp != null) {
-                    val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                    val data = resp.toString()
-                    val short = if (data.length > 800) data.take(800) + "..." else data
-                    addEntry("[$ts] NEW_RES $method\n  $short")
+                    val short = if (resp.length > 1000) resp.take(1000) + "..." else resp
+                    write("[${now()}] NEW_RES $method\n  $short\n")
                 }
             } catch (_: Throwable) {}
         }
     }
 
-    private fun addEntry(entry: String) {
-        synchronized(capturedRpcs) {
-            capturedRpcs.add(entry)
-            if (capturedRpcs.size > 500) capturedRpcs.removeAt(0)
+    private fun createOldRpcHook() = object : XC_MethodHook() {
+        override fun beforeHookedMethod(param: MethodHookParam) {
+            if (!isRecording || writer == null) return
+            try {
+                val method = param.args[0] as? String ?: return
+                val args = param.args[1]?.toString() ?: "null"
+                write("[${now()}] OLD_REQ $method\n  $args\n")
+            } catch (_: Throwable) {}
+        }
+        override fun afterHookedMethod(param: MethodHookParam) {
+            if (!isRecording || writer == null) return
+            try {
+                val method = param.args[0] as? String ?: return
+                val result = param.result ?: return
+                val resp = result.javaClass.getMethod("getResponse").invoke(result) as? String ?: return
+                val short = if (resp.length > 1000) resp.take(1000) + "..." else resp
+                write("[${now()}] OLD_RES $method\n  $short\n")
+            } catch (_: Throwable) {}
         }
     }
 
-    /** 处理广播命令 */
-    fun handleBroadcast(action: String?) {
-        when (action) {
-            BROADCAST_START -> startRecording()
-            BROADCAST_STOP -> stopRecording()
-        }
-    }
+    private fun now() = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
 }
