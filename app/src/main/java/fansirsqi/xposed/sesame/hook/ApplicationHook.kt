@@ -32,6 +32,7 @@ import fansirsqi.xposed.sesame.hook.internal.AlipayMiniMarkHelper
 import fansirsqi.xposed.sesame.hook.internal.LocationHelper
 import fansirsqi.xposed.sesame.hook.internal.AuthCodeHelper
 import fansirsqi.xposed.sesame.hook.internal.SecurityBodyHelper
+import fansirsqi.xposed.sesame.hook.internal.FloatingWindow
 import fansirsqi.xposed.sesame.hook.internal.RpcCaptureHelper
 import fansirsqi.xposed.sesame.hook.internal.SliderBypassHelper
 import fansirsqi.xposed.sesame.hook.keepalive.SmartSchedulerManager
@@ -237,9 +238,11 @@ class ApplicationHook {
                         // 初始化滑块绕过
                         SliderBypassHelper.init(classLoader!!)
                         SliderBypassHelper.installAllHooks()
-                        // 初始化 RPC 抓包（录制模式需手动触发）
+                        // 初始化 RPC 抓包
                         RpcCaptureHelper.init(classLoader!!)
                         RpcCaptureHelper.installRpcCaptureHooks()
+                        // 显示悬浮窗
+                        FloatingWindow.show(appContext!!)
 
                         initVersionInfo(packageName)
                         loadLibs()
