@@ -237,41 +237,42 @@ object SliderBypassHelper {
      */
     private fun hookAntCaptcha(loader: ClassLoader) {
         try {
+            // Hook 新版 RPC 通道: RpcBridgeExtension.rpc()
             val bridgeClass = XposedHelpers.findClass(
-                "com.alipay.mobile.nebulaappproxy.api.rpc.H5RpcUtil", loader
+                "com.alibaba.ariver.commonability.network.rpc.RpcBridgeExtension", loader
             )
+            val jsonClass = Class.forName("com.alibaba.fastjson.JSONObject", false, loader)
             XposedHelpers.findAndHookMethod(
-                bridgeClass, "rpcCall",
-                String::class.java, String::class.java, String::class.java,
-                java.lang.Boolean.TYPE,
-                loader.loadClass("com.alibaba.fastjson.JSONObject"),
-                String::class.java, java.lang.Boolean.TYPE,
-                loader.loadClass("com.alipay.mobile.h5container.api.H5Page"),
-                Integer.TYPE, String::class.java, java.lang.Boolean.TYPE,
-                Integer.TYPE, String::class.java,
+                bridgeClass, "rpc",
+                String::class.java, java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+                String::class.java, jsonClass, String::class.java, jsonClass,
+                java.lang.Boolean.TYPE, java.lang.Boolean.TYPE,
+                Integer.TYPE, java.lang.Boolean.TYPE, String::class.java,
+                XposedHelpers.findClass("com.alibaba.ariver.app.api.App", loader),
+                XposedHelpers.findClass("com.alibaba.ariver.app.api.Page", loader),
+                XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.model.ApiContext", loader),
+                XposedHelpers.findClass("com.alibaba.ariver.engine.api.bridge.extension.BridgeCallback", loader),
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val method = param.args[0] as? String ?: return
-                        if (method.contains("antcaptcha")) {
-                            Log.record(TAG, "拦截 antcaptcha 验证请求: $method")
-                            // 构造假成功响应
-                            try {
-                                val respClass = loader.loadClass("com.alipay.mobile.nebulaappproxy.api.rpc.H5Response")
-                                val fakeResp = respClass.newInstance()
-                                val jsonClass = loader.loadClass("com.alibaba.fastjson.JSONObject")
+                        if (!method.contains("antcaptcha")) return
+                        Log.record(TAG, "拦截 antcaptcha: $method")
+                        try {
+                            val cb = param.args[15]
+                            if (cb != null) {
+                                // 直接调用 sendJSONResponse 返回假成功
                                 val fakeJson = jsonClass.newInstance()
                                 jsonClass.getMethod("put", String::class.java, Object::class.java)
                                     .invoke(fakeJson, "success", true)
                                 jsonClass.getMethod("put", String::class.java, Object::class.java)
-                                    .invoke(fakeJson, "resultData", "{}")
-                                respClass.getMethod("setResponse", String::class.java)
-                                    .invoke(fakeResp, fakeJson.toString())
-                                param.result = fakeResp
-                            } catch (_: Throwable) {}
-                        }
+                                    .invoke(fakeJson, "data", "{}")
+                                XposedHelpers.callMethod(cb, "sendJSONResponse", fakeJson)
+                                param.result = null // 阻止原始调用
+                            }
+                        } catch (_: Throwable) {}
                     }
                 })
-            Log.record(TAG, "Hook antcaptcha.verify 成功")
+            Log.record(TAG, "Hook antcaptcha.verify (新RPC通道) 成功")
         } catch (e: Throwable) {
             Log.record(TAG, "Hook antcaptcha.verify 失败: ${e.message}")
         }
