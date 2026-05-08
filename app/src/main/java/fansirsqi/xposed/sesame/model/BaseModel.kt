@@ -172,7 +172,7 @@ class BaseModel : Model() {
          * 是否开启抓包调试模式
          */
         @Getter
-        val debugMode: BooleanModelField = BooleanModelField("debugMode", "开启抓包(基于新接口)", false)
+        val debugMode: BooleanModelField = BooleanModelField("debugMode", "开启抓包(基于新接口)", true)
 
         /**
          * 是否申请目标应用的后台运行权限
