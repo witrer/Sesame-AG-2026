@@ -1,7 +1,6 @@
 package fansirsqi.xposed.sesame.util
 
-import de.robv.android.xposed.XSharedPreferences
-import fansirsqi.xposed.sesame.SesameApplication
+import java.io.File
 
 data class ModuleRuntimeStatus(
     val framework: String,
@@ -11,39 +10,36 @@ data class ModuleRuntimeStatus(
 
 object StatusManager {
     private const val TAG = "StatusManager"
-    private const val KEY_FRAMEWORK = "status_framework"
-    private const val KEY_TIMESTAMP = "status_timestamp"
-    private const val KEY_PACKAGE = "status_package"
+    private const val STATUS_FILE_NAME = "ModuleStatus.json"
 
-    /** 获取 XSharedPreferences，用于跨进程共享状态 */
-    private fun getPrefs(): XSharedPreferences {
-        val prefs = XSharedPreferences(
-            fansirsqi.xposed.sesame.data.General.MODULE_PACKAGE_NAME,
-            SesameApplication.PREFERENCES_KEY
-        )
-        prefs.makeWorldReadable()
-        return prefs
+    private fun getStatusFile(): File {
+        return File(Files.CONFIG_DIR.parentFile, STATUS_FILE_NAME)
     }
 
-    /** [Hook端] 写入当前激活状态到 XSharedPreferences */
+    /** [Hook端] 写入当前激活状态 */
     fun updateStatus(framework: String, packageName: String) {
         try {
-            val prefs = getPrefs()
-            prefs.reload()
-            val editor = prefs.edit()
-            editor.putString(KEY_FRAMEWORK, framework)
-            editor.putLong(KEY_TIMESTAMP, System.currentTimeMillis())
-            editor.putString(KEY_PACKAGE, packageName)
-            editor.apply()
+            // 写入文件
+            val status = ModuleRuntimeStatus(framework, System.currentTimeMillis(), packageName)
+            val json = JsonHelper.toJson(status)
+            Files.write2File(json, getStatusFile())
 
-            // 同时写文件作为备份
+            // 同时写入 XSharedPreferences 供模块 App 读取
             try {
-                val status = ModuleRuntimeStatus(framework, System.currentTimeMillis(), packageName)
-                val json = JsonHelper.toJson(status)
-                Files.write2File(json, java.io.File(Files.CONFIG_DIR.parentFile, "ModuleStatus.json"))
-            } catch (_: Exception) {}
+                val prefs = de.robv.android.xposed.XSharedPreferences(
+                    fansirsqi.xposed.sesame.data.General.MODULE_PACKAGE_NAME,
+                    fansirsqi.xposed.sesame.SesameApplication.PREFERENCES_KEY
+                )
+                prefs.makeWorldReadable()
+                prefs.reload()
+                prefs.edit()
+                    .putString("status_framework", framework)
+                    .putLong("status_timestamp", System.currentTimeMillis())
+                    .putString("status_package", packageName)
+                    .apply()
+            } catch (_: Throwable) {}
 
-            Log.d(TAG, "Status updated via XSharedPreferences: $framework")
+            Log.d(TAG, "Status updated: $framework")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to write status", e)
         }
@@ -51,16 +47,36 @@ object StatusManager {
 
     /** [UI端] 读取激活状态 */
     fun readStatus(): ModuleRuntimeStatus? {
-        return try {
-            val prefs = getPrefs()
+        // 优先从文件读取（可靠性高）
+        try {
+            val file = getStatusFile()
+            if (file.exists()) {
+                val json = Files.readFromFile(file)
+                val status = JsonHelper.fromJson<ModuleRuntimeStatus>(json)
+                if (status != null && status.framework.isNotEmpty()) {
+                    return status
+                }
+            }
+        } catch (_: Exception) {}
+
+        // 备用：从 XSharedPreferences 读取
+        try {
+            val prefs = de.robv.android.xposed.XSharedPreferences(
+                fansirsqi.xposed.sesame.data.General.MODULE_PACKAGE_NAME,
+                fansirsqi.xposed.sesame.SesameApplication.PREFERENCES_KEY
+            )
+            prefs.makeWorldReadable()
             prefs.reload()
-            val framework = prefs.getString(KEY_FRAMEWORK, null)
-            if (framework.isNullOrEmpty()) return null
-            val timestamp = prefs.getLong(KEY_TIMESTAMP, 0L)
-            val packageName = prefs.getString(KEY_PACKAGE, "") ?: ""
-            ModuleRuntimeStatus(framework, timestamp, packageName)
-        } catch (e: Exception) {
-            null
-        }
+            val framework = prefs.getString("status_framework", null)
+            if (!framework.isNullOrEmpty()) {
+                return ModuleRuntimeStatus(
+                    framework = framework,
+                    timestamp = prefs.getLong("status_timestamp", 0L),
+                    packageName = prefs.getString("status_package", "") ?: ""
+                )
+            }
+        } catch (_: Throwable) {}
+
+        return null
     }
 }
