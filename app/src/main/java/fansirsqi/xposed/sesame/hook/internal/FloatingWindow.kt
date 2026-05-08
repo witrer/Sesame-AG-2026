@@ -3,6 +3,7 @@ package fansirsqi.xposed.sesame.hook.internal
 import android.app.Activity
 import android.content.Context
 import android.graphics.*
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.*
